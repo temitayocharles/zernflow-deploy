@@ -1,0 +1,72 @@
+name: Validate ZernFlow cron auth correction
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key
+      CRON_SECRET: ci-cron-secret-with-at-least-24-characters
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+    steps:
+      - name: Checkout exact deployed ZernFlow source
+        uses: actions/checkout@v5
+        with:
+          repository: temitayocharles/zernflow
+          ref: 0978b6d6001c2398d345beece947dde4e0c30668
+          path: zernflow
+
+      - name: Apply exact PR 21 test correction
+        working-directory: zernflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('middleware.test.ts')
+          s = p.read_text()
+          old = 'it("promotes X-Cron-Secret to the existing Bearer contract for cron routes"'
+          new = 'it("promotes and consumes X-Cron-Secret for cron routes"'
+          if old not in s:
+              raise SystemExit('expected old test title not found')
+          s = s.replace(old, new, 1)
+          old2 = 'cronSecret: "test-cron-secret",'
+          if old2 not in s:
+              raise SystemExit('expected stale cronSecret assertion not found')
+          s = s.replace(old2, 'cronSecret: null,', 1)
+          p.write_text(s)
+          PY
+          git diff --exit-code -- middleware.ts || true
+          git diff -- middleware.test.ts
+
+      - name: Install locked dependencies
+        working-directory: zernflow
+        run: npm ci --no-audit --no-fund
+
+      - name: Audit production dependencies
+        working-directory: zernflow
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Lint
+        working-directory: zernflow
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: zernflow
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: zernflow
+        run: npm test
+
+      - name: Production build
+        working-directory: zernflow
+        run: npm run build
